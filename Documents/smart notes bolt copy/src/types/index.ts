@@ -10,10 +10,19 @@ export interface Note {
 
 export type NotebookTheme = 'white' | 'dark' | 'ruled' | 'spiral' | 'grid' | 'dotted';
 
+export interface OCRWord {
+  text: string;
+  confidence: number;
+}
+
 export interface OCRResult {
   text: string;
   confidence: number;
   paragraphs: string[];
+  rawText?: string;
+  engine: 'cloud-vision' | 'tesseract';
+  lowConfidenceWords: OCRWord[];
+  preprocessingApplied: string[];
 }
 
 export interface SummaryResult {
