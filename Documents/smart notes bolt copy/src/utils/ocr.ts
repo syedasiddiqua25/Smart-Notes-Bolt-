@@ -1,24 +1,20 @@
 /**
  * Smart Notes — OCR Pipeline
  *
- * Pipeline:
- *   1. Image quality check (size, format)
- *   2. Image preprocessing (upscale, denoise, contrast, shadow removal, deskew, adaptive threshold)
- *   3. Text recognition (Google Cloud Vision → Tesseract fallback)
- *   4. Reading order reconstruction
- *   5. OCR confidence evaluation (per-word confidence from engine)
- *   6. Careful OCR correction (preserves special characters / code syntax)
- *
- * Cloud OCR (Google Cloud Vision) is tried first because it has a dedicated
- * handwriting model and handles cursive handwriting far better than
- * Tesseract.  If the cloud function is unavailable (no API key configured,
- * network error, etc.), we fall back to an enhanced Tesseract.js pipeline
- * with aggressive preprocessing so the app still works offline.
+ * Sends the image to the Flask backend running PaddleOCR, receives
+ * extracted text with per-line confidence, and post-processes the
+ * result with spell correction and paragraph detection.
  */
 
-import Tesseract from 'tesseract.js';
 import type { OCRResult, OCRWord } from '../types';
-import { preprocessImage, preprocessForCloud, compressImage } from './imageProcessing';
+import { preprocessImage, compressImage } from './imageProcessing';
+
+// ---------------------------------------------------------------------------
+// Backend API URL
+// ---------------------------------------------------------------------------
+
+const OCR_API_URL =
+  import.meta.env.VITE_OCR_API_URL || 'http://localhost:5000/ocr';
 
 // ---------------------------------------------------------------------------
 // Correction dictionary
@@ -113,170 +109,67 @@ function detectParagraphs(text: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Cloud OCR (Google Cloud Vision via Supabase Edge Function)
+// Backend OCR call (PaddleOCR via Flask)
 // ---------------------------------------------------------------------------
 
-interface CloudOCRResponse {
+interface BackendOCRResponse {
   text: string;
   confidence: number;
-  words: OCRWord[];
-  paragraphs: string[];
+  paragraphs?: string[];
   error?: string;
-  fallback?: boolean;
 }
 
-async function cloudOCR(
-  imageDataUrl: string,
-  onProgress?: (p: number) => void,
-): Promise<OCRResult | null> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !anonKey) return null;
-
-  onProgress?.(5);
-
-  // Compress for the API payload
-  const compressed = await compressImage(imageDataUrl, 4);
-  onProgress?.(15);
-
-  // Preprocess lightly (no binarization — Vision does its own)
-  const processed = await preprocessForCloud(compressed);
-  onProgress?.(30);
-
-  const apiUrl = `${supabaseUrl}/functions/v1/ocr-vision`;
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  // Only add auth header if we have a real anon key
-  if (anonKey && anonKey.length > 10) {
-    headers['Authorization'] = `Bearer ${anonKey}`;
-  }
-
-  try {
-    const resp = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ image: processed.dataUrl }),
-    });
-
-    onProgress?.(70);
-
-    if (!resp.ok) {
-      console.warn('Cloud OCR returned non-OK status:', resp.status);
-      return null;
-    }
-
-    const data: CloudOCRResponse = await resp.json();
-
-    if (data.error || data.fallback) {
-      console.warn('Cloud OCR error:', data.error);
-      return null;
-    }
-
-    onProgress?.(90);
-
-    const rawText = data.text || '';
-    const cleanedText = cleanOcrText(rawText);
-    const paragraphs = data.paragraphs?.length
-      ? data.paragraphs.map(p => cleanOcrText(p)).filter(p => p.length > 0)
-      : detectParagraphs(cleanedText);
-
-    // Identify low-confidence words (< 70%)
-    const lowConfidenceWords = (data.words || []).filter(
-      w => w.confidence > 0 && w.confidence < 70,
-    );
-
-    return {
-      text: cleanedText,
-      rawText,
-      confidence: data.confidence || 0,
-      paragraphs,
-      engine: 'cloud-vision',
-      lowConfidenceWords,
-      preprocessingApplied: processed.steps,
-    };
-  } catch (err) {
-    console.warn('Cloud OCR failed, falling back to Tesseract:', err);
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tesseract fallback (enhanced with preprocessing)
-// ---------------------------------------------------------------------------
-
-async function tesseractOCR(
+async function paddleOCR(
   imageDataUrl: string,
   onProgress?: (p: number) => void,
 ): Promise<OCRResult> {
-  // Full preprocessing including adaptive threshold for Tesseract
-  const processed = await preprocessImage(imageDataUrl);
-  onProgress?.(20);
+  // Compress for the HTTP payload
+  onProgress?.(5);
+  const compressed = await compressImage(imageDataUrl, 4);
+  onProgress?.(15);
 
-  let timedOut = false;
-  const TIMEOUT_MS = 120000;
-  const timeoutId = setTimeout(() => { timedOut = true; }, TIMEOUT_MS);
+  // Light browser-side preprocessing (upscale, grayscale, denoise, deskew — no binarization)
+  const processed = await preprocessImage(compressed);
+  onProgress?.(30);
 
-  try {
-    const result = await Tesseract.recognize(processed.dataUrl, 'eng', {
-      logger: (m: { status: string; progress?: number }) => {
-        if (timedOut) return;
-        if (typeof m.progress === 'number' && onProgress) {
-          if (m.status === 'loading tesseract core') {
-            onProgress(20 + Math.round(m.progress * 10));
-          } else if (m.status === 'initializing tesseract') {
-            onProgress(30 + Math.round(m.progress * 10));
-          } else if (m.status === 'loading language traineddata') {
-            onProgress(40 + Math.round(m.progress * 20));
-          } else if (m.status === 'initializing api') {
-            onProgress(60 + Math.round(m.progress * 10));
-          } else if (m.status === 'recognizing text') {
-            onProgress(70 + Math.round(m.progress * 30));
-          }
-        }
-      },
-    });
+  const resp = await fetch(OCR_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: processed.dataUrl }),
+  });
 
-    clearTimeout(timeoutId);
+  onProgress?.(70);
 
-    if (timedOut) {
-      throw new Error('OCR timed out. Please try a smaller or simpler image.');
-    }
-
-    const rawText = result.data.text || '';
-    const confidence = Math.round(result.data.confidence || 0);
-    const cleanedText = cleanOcrText(rawText);
-    const paragraphs = detectParagraphs(cleanedText);
-
-    // Extract low-confidence words from Tesseract's per-word data
-    const lowConfidenceWords: OCRWord[] = [];
-    const tdata = result.data as unknown as {
-      words?: Array<{ text: string; confidence: number }>;
-    };
-    if (tdata.words) {
-      for (const w of tdata.words) {
-        const conf = Math.round(w.confidence);
-        if (conf > 0 && conf < 70) {
-          lowConfidenceWords.push({ text: w.text, confidence: conf });
-        }
-      }
-    }
-
-    return {
-      text: cleanedText,
-      rawText,
-      confidence,
-      paragraphs,
-      engine: 'tesseract',
-      lowConfidenceWords,
-      preprocessingApplied: processed.steps,
-    };
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error) throw error;
-    throw new Error('OCR processing failed. Please try with a different image.');
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => ({})) as BackendOCRResponse;
+    throw new Error(errBody.error || `OCR backend returned ${resp.status}`);
   }
+
+  const data: BackendOCRResponse = await resp.json();
+
+  if (data.error) {
+    throw new Error(data.error);
+  }
+
+  onProgress?.(90);
+
+  const rawText = data.text || '';
+  const cleanedText = cleanOcrText(rawText);
+  const paragraphs = data.paragraphs?.length
+    ? data.paragraphs.map(p => cleanOcrText(p)).filter(p => p.length > 0)
+    : detectParagraphs(cleanedText);
+
+  const lowConfidenceWords: OCRWord[] = [];
+
+  return {
+    text: cleanedText,
+    rawText,
+    confidence: data.confidence || 0,
+    paragraphs,
+    engine: 'paddleocr',
+    lowConfidenceWords,
+    preprocessingApplied: processed.steps,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -302,16 +195,8 @@ export async function extractTextFromImage(
 
   onProgress?.(2);
 
-  // Step 2: Try cloud OCR first (best handwriting support)
-  const cloudResult = await cloudOCR(dataUrl, onProgress);
-  if (cloudResult && cloudResult.text.trim()) {
-    onProgress?.(100);
-    return cloudResult;
-  }
-
-  // Step 3: Fall back to enhanced Tesseract with full preprocessing
-  onProgress?.(10);
-  const tessResult = await tesseractOCR(dataUrl, onProgress);
+  // Step 2: Send to PaddleOCR backend
+  const result = await paddleOCR(dataUrl, onProgress);
   onProgress?.(100);
-  return tessResult;
+  return result;
 }

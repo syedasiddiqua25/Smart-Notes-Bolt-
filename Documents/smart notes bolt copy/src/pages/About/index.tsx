@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { BookOpen, Code2, GraduationCap, Heart, Users, Target, Lightbulb, ArrowRight } from 'lucide-react';
+import { BookOpen, Code as Code2, GraduationCap, Heart, Users, Target, Lightbulb, ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 const fadeUp = {
@@ -19,7 +19,7 @@ const values = [
 
 const techStack = [
   { category: 'Frontend', items: ['React', 'TypeScript', 'Tailwind CSS', 'Framer Motion'] },
-  { category: 'OCR Engine', items: ['Tesseract.js', 'OpenCV (Backend)', 'Pillow (Backend)'] },
+  { category: 'OCR Engine', items: ['PaddleOCR', 'OpenCV (Backend)'] },
   { category: 'Backend', items: ['Python Flask', 'RESTful API', 'Modular Architecture'] },
   { category: 'Export', items: ['jsPDF', 'docx.js', 'File Saver'] },
 ];

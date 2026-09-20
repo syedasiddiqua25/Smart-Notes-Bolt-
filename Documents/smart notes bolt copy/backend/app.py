@@ -1,7 +1,7 @@
 """
 Smart Notes - Flask Backend API
-Provides OCR processing with OpenCV preprocessing, Tesseract OEM 3 PSM 6,
-spell correction, note management, document export, and AI summary endpoints.
+Provides OCR processing with PaddleOCR, note management,
+document export, and AI summary endpoints.
 """
 
 import os
@@ -62,68 +62,32 @@ def clean_ocr_text(text):
     return cleaned.strip()
 
 
-def preprocess_image(img):
-    """Preprocess image for better OCR accuracy using OpenCV."""
-    import cv2
-    import numpy as np
+# --- PaddleOCR Engine (lazy-loaded singleton) ---
 
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Increase contrast using CLAHE
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-
-    # Denoise
-    gray = cv2.fastNlMeansDenoising(gray, h=10)
-
-    # Binarize using Otsu's method
-    gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-
-    # Deskew (correct rotation)
-    coords = np.column_stack(np.where(gray > 0))
-    if len(coords) > 0:
-        angle = cv2.minAreaRect(coords)[-1]
-        if angle < -45:
-            angle = -(90 + angle)
-        else:
-            angle = -angle
-        if abs(angle) < 15:  # Only correct small rotations
-            h, w = gray.shape
-            center = (w // 2, h // 2)
-            M = cv2.getRotationMatrix2D(center, angle, 1.0)
-            gray = cv2.warpAffine(gray, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
-
-    return gray
+_ocr_engine = None
 
 
-# --- OCR Endpoints ---
+def get_ocr_engine():
+    """Lazily initialize the PaddleOCR engine on first use."""
+    global _ocr_engine
+    if _ocr_engine is not None:
+        return _ocr_engine
 
-@app.route('/upload-image', methods=['POST'])
-def upload_image():
-    """Upload an image file for OCR processing."""
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image file provided'}), 400
+    from paddleocr import PaddleOCR
 
-    file = request.files['image']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
+    _ocr_engine = PaddleOCR(
+        use_angle_cls=True,
+        lang='en',
+        show_log=False,
+    )
+    return _ocr_engine
 
-    ext = os.path.splitext(file.filename)[1] or '.png'
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-    file.save(tmp.name)
-    tmp.close()
 
-    return jsonify({
-        'message': 'Image uploaded successfully',
-        'path': tmp.name,
-        'filename': file.filename
-    }), 200
-
+# --- OCR Endpoint ---
 
 @app.route('/ocr', methods=['POST'])
 def ocr_process():
-    """Process an image with Tesseract OCR (OEM 3, PSM 6) and OpenCV preprocessing."""
+    """Process an image with PaddleOCR and return extracted text + confidence."""
     data = request.get_json()
     image_data = data.get('image') if data else None
 
@@ -132,7 +96,6 @@ def ocr_process():
 
     try:
         import cv2
-        import pytesseract
         import numpy as np
 
         # Decode base64 image
@@ -146,31 +109,48 @@ def ocr_process():
         if img is None:
             return jsonify({'error': 'Could not decode image'}), 400
 
-        # Preprocess for better OCR
-        processed = preprocess_image(img)
+        # Run PaddleOCR
+        engine = get_ocr_engine()
+        result = engine.ocr(img, cls=True)
 
-        # Run OCR with OEM 3 (LSTM + Legacy), PSM 6 (single uniform block)
-        config = '--oem 3 --psm 6 --preserve-interword-spaces 1'
-        text = pytesseract.image_to_string(processed, config=config)
+        # PaddleOCR returns a list of pages; each page is a list of lines.
+        # Each line: [bbox, (text, confidence)]
+        all_lines = []
+        confidences = []
 
-        # Get confidence data
-        data_dict = pytesseract.image_to_data(processed, config=config, output_type=pytesseract.Output.DICT)
-        conf_values = [int(c) for c in data_dict['conf'] if int(c) > 0]
-        avg_confidence = sum(conf_values) / len(conf_values) if conf_values else 0
+        for page in result:
+            if page is None:
+                continue
+            for line in page:
+                if line is None:
+                    continue
+                text = line[1][0]
+                conf = line[1][1]
+                all_lines.append(text)
+                if conf is not None and conf > 0:
+                    confidences.append(conf)
+
+        full_text = '\n'.join(all_lines)
+        avg_confidence = round(sum(confidences) / len(confidences) * 100, 2) if confidences else 0
+
+        # Split into paragraphs
+        paragraphs = [p.strip() for p in full_text.split('\n\n') if p.strip()]
 
         # Clean and spell-correct
-        cleaned = clean_ocr_text(text)
+        cleaned = clean_ocr_text(full_text)
+        cleaned_paragraphs = [clean_ocr_text(p) for p in paragraphs if p.strip()]
 
         return jsonify({
             'text': cleaned,
-            'confidence': round(avg_confidence, 2)
+            'confidence': avg_confidence,
+            'paragraphs': cleaned_paragraphs,
         }), 200
 
     except ImportError:
         return jsonify({
             'text': '',
             'confidence': 0,
-            'error': 'OCR libraries not installed. Run: pip install opencv-python pytesseract Pillow'
+            'error': 'PaddleOCR not installed. Run: pip install paddleocr paddlepaddle'
         }), 503
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -336,7 +316,7 @@ def generate_summary():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'version': '1.0.0'}), 200
+    return jsonify({'status': 'ok', 'version': '2.0.0'}), 200
 
 
 if __name__ == '__main__':

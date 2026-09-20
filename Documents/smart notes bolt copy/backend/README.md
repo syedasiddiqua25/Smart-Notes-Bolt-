@@ -11,18 +11,7 @@ source venv/bin/activate  # Linux/Mac
 pip install -r requirements.txt
 ```
 
-## Install Tesseract OCR
-
-```bash
-# Ubuntu/Debian
-sudo apt install tesseract-ocr
-
-# macOS
-brew install tesseract
-
-# Windows
-# Download from https://github.com/UB-Mannheim/tesseract/wiki
-```
+PaddleOCR models are downloaded automatically on first run.
 
 ## Run
 
@@ -36,8 +25,7 @@ Server runs on `http://localhost:5000`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/upload-image` | Upload image for OCR |
-| POST | `/ocr` | Process image with OCR |
+| POST | `/ocr` | Process image with PaddleOCR |
 | POST | `/save-note` | Save/update a note |
 | GET | `/get-notes` | Get all notes |
 | DELETE | `/delete-note/<id>` | Delete a note |

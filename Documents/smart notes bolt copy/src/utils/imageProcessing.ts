@@ -1,17 +1,19 @@
 /**
  * Browser-based image preprocessing for OCR.
  *
- * Every function returns a data URL (PNG or JPEG) so results can be
- * passed directly to Tesseract.js or to the cloud OCR edge function.
+ * Every function returns a data URL (JPEG) so results can be
+ * passed directly to the PaddleOCR backend.
  *
  * The pipeline is designed for photographed notebook pages:
  *   - upscaling small images
  *   - grayscale conversion
  *   - CLAHE-style contrast enhancement
- *   - bilateral / median noise reduction
- *   - adaptive thresholding (NOT global Otsu, to preserve faint strokes)
+ *   - median noise reduction
  *   - shadow / bleed-through suppression
- *   - deskew via Hough-line or projection-profile angle detection
+ *   - deskew via projection-profile angle detection
+ *
+ * No binarization — PaddleOCR's detection model works better with
+ * 8-bit grayscale than with hard-thresholded binary images.
  *
  * The original image is never mutated — every step produces a new canvas.
  */
@@ -36,11 +38,6 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 /** Canvas → JPEG data URL. */
 function canvasToJpeg(canvas: HTMLCanvasElement, quality = 0.92): string {
   return canvas.toDataURL('image/jpeg', quality);
-}
-
-/** Canvas → PNG data URL. */
-function canvasToPng(canvas: HTMLCanvasElement): string {
-  return canvas.toDataURL('image/png');
 }
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -196,72 +193,7 @@ function removeShadows(src: HTMLCanvasElement): HTMLCanvasElement {
 }
 
 /**
- * Step 6 — Adaptive threshold (Sauvola-ish).
- * For each pixel, compute the mean and std-dev of a local window.  If the
- * pixel is significantly darker than the local mean, mark it as ink (0),
- * otherwise background (255).  This preserves faint strokes that a global
- * Otsu threshold would erase.
- *
- * Implementation uses integral images (summed-area tables) for O(1) per-pixel
- * mean computation.  Std-dev is approximated via mean of squares.
- */
-function adaptiveThreshold(src: HTMLCanvasElement, windowSize = 41, k = 0.2): HTMLCanvasElement {
-  const w = src.width, h = src.height;
-  const [dst, dctx] = makeCanvas(w, h);
-  const sctx = src.getContext('2d', { willReadFrequently: true })!;
-  const data = sctx.getImageData(0, 0, w, h).data;
-
-  // Build integral images
-  const half = Math.floor(windowSize / 2);
-  const size = w * h;
-  const integral = new Float64Array(size + w + h + 1);
-  const integralSq = new Float64Array(size + w + h + 1);
-
-  for (let y = 0; y < h; y++) {
-    let rowSum = 0, rowSumSq = 0;
-    for (let x = 0; x < w; x++) {
-      const v = data[(y * w + x) * 4];
-      rowSum += v;
-      rowSumSq += v * v;
-      const idx = (y + 1) * (w + 1) + (x + 1);
-      integral[idx] = integral[y * (w + 1) + (x + 1)] + rowSum;
-      integralSq[idx] = integralSq[y * (w + 1) + (x + 1)] + rowSumSq;
-    }
-  }
-
-  const out = dctx.createImageData(w, h);
-  const o = out.data;
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const x1 = Math.max(0, x - half);
-      const y1 = Math.max(0, y - half);
-      const x2 = Math.min(w - 1, x + half);
-      const y2 = Math.min(h - 1, y + half);
-      const area = (x2 - x1 + 1) * (y2 - y1 + 1);
-      const a1 = y1 * (w + 1) + x1;
-      const a2 = y1 * (w + 1) + x2 + 1;
-      const b1 = (y2 + 1) * (w + 1) + x1;
-      const b2 = (y2 + 1) * (w + 1) + x2 + 1;
-
-      const sum = integral[b2] - integral[a2] - integral[b1] + integral[a1];
-      const sumSq = integralSq[b2] - integralSq[a2] - integralSq[b1] + integralSq[a1];
-      const mean = sum / area;
-      const variance = Math.max(0, sumSq / area - mean * mean);
-      const std = Math.sqrt(variance);
-      const threshold = mean * (1 - k * (1 - std / 128));
-      const idx = (y * w + x) * 4;
-      const val = data[idx] < threshold ? 0 : 255;
-      o[idx] = o[idx + 1] = o[idx + 2] = val;
-      o[idx + 3] = 255;
-    }
-  }
-  dctx.putImageData(out, 0, 0);
-  return dst;
-}
-
-/**
- * Step 7 — Deskew.
+ * Step 6 — Deskew.
  * Estimates the rotation angle by looking at horizontal projection profiles.
  * For a range of candidate angles (±12° in 0.5° steps), we rotate the image
  * and compute the variance of row-sums.  The angle that maximises variance
@@ -322,9 +254,11 @@ function deskew(src: HTMLCanvasElement): { canvas: HTMLCanvasElement; angle: num
 }
 
 /**
- * Run the full preprocessing pipeline on a data URL.
- * Returns the processed image as a PNG data URL plus a list of steps
+ * Run the preprocessing pipeline on a data URL.
+ * Returns the processed image as a JPEG data URL plus a list of steps
  * that were applied (for display to the user).
+ *
+ * No binarization — PaddleOCR works better with 8-bit grayscale.
  */
 export async function preprocessImage(dataUrl: string): Promise<PreprocessResult> {
   const img = await loadImage(dataUrl);
@@ -351,45 +285,6 @@ export async function preprocessImage(dataUrl: string): Promise<PreprocessResult
   steps.push('median denoise (3×3)');
 
   // 6. Deskew
-  const { canvas: c6, angle } = deskew(c5);
-  if (angle !== 0) steps.push(`deskew ${angle.toFixed(1)}°`);
-
-  // 7. Adaptive threshold — produce the binarized version
-  const c7 = adaptiveThreshold(c6, 41, 0.2);
-  steps.push('adaptive threshold (Sauvola)');
-
-  return {
-    dataUrl: canvasToPng(c7),
-    steps,
-    width: c7.width,
-    height: c7.height,
-  };
-}
-
-/**
- * Produce a lightly-processed version (no binarization) for the cloud
- * OCR engine.  Google Cloud Vision performs its own internal preprocessing,
- * so we only upscale + denoise + deskew and keep 8-bit grayscale.
- */
-export async function preprocessForCloud(dataUrl: string): Promise<PreprocessResult> {
-  const img = await loadImage(dataUrl);
-  const steps: string[] = [];
-
-  const { canvas: c1, step: s1 } = upscale(img);
-  if (s1 !== 'none (already high-res)') steps.push(s1);
-
-  const c2 = toGrayscale(c1);
-  steps.push('grayscale');
-
-  const c3 = removeShadows(c2);
-  steps.push('shadow & bleed-through suppression');
-
-  const c4 = enhanceContrast(c3);
-  steps.push('contrast enhancement');
-
-  const c5 = medianDenoise(c4);
-  steps.push('median denoise');
-
   const { canvas: c6, angle } = deskew(c5);
   if (angle !== 0) steps.push(`deskew ${angle.toFixed(1)}°`);
 
@@ -428,6 +323,3 @@ export function compressImage(dataUrl: string, maxSizeMB = 4): Promise<string> {
     img.src = dataUrl;
   });
 }
-
-
-export { preprocessImage, preprocessForCloud, compressImage }
