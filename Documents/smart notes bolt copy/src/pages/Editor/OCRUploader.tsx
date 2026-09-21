@@ -49,7 +49,7 @@ export default function OCRUploader({ onTextExtracted }: OCRUploaderProps) {
       } catch (err) {
         if (!abortRef.current) {
           setError(err instanceof Error ? err.message : 'OCR processing failed');
-          setResult({ text: '', confidence: 0, paragraphs: [], engine: 'paddleocr', lowConfidenceWords: [], preprocessingApplied: [] });
+          setResult({ text: '', confidence: 0, paragraphs: [], engine: 'tesseract', lowConfidenceWords: [], preprocessingApplied: [] });
         }
       } finally {
         setProcessing(false);
@@ -136,7 +136,7 @@ export default function OCRUploader({ onTextExtracted }: OCRUploaderProps) {
   };
 
   const hasLowConfidence = result && result.lowConfidenceWords.length > 0;
-  const engineLabel = 'PaddleOCR';
+  const engineLabel = 'Tesseract OCR';
 
   return (
     <div onPaste={handlePaste} className="w-full">

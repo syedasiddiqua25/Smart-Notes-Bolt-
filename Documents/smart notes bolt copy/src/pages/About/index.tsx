@@ -19,7 +19,7 @@ const values = [
 
 const techStack = [
   { category: 'Frontend', items: ['React', 'TypeScript', 'Tailwind CSS', 'Framer Motion'] },
-  { category: 'OCR Engine', items: ['PaddleOCR', 'OpenCV (Backend)'] },
+  { category: 'OCR Engine', items: ['Tesseract OCR', 'OpenCV (Backend)'] },
   { category: 'Backend', items: ['Python Flask', 'RESTful API', 'Modular Architecture'] },
   { category: 'Export', items: ['jsPDF', 'docx.js', 'File Saver'] },
 ];

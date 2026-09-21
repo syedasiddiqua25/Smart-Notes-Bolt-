@@ -20,7 +20,7 @@ export interface OCRResult {
   confidence: number;
   paragraphs: string[];
   rawText?: string;
-  engine: 'paddleocr';
+  engine: 'tesseract';
   lowConfidenceWords: OCRWord[];
   preprocessingApplied: string[];
 }

@@ -2,7 +2,7 @@
  * Browser-based image preprocessing for OCR.
  *
  * Every function returns a data URL (JPEG) so results can be
- * passed directly to the PaddleOCR backend.
+ * passed directly to the Tesseract backend.
  *
  * The pipeline is designed for photographed notebook pages:
  *   - upscaling small images
@@ -12,7 +12,7 @@
  *   - shadow / bleed-through suppression
  *   - deskew via projection-profile angle detection
  *
- * No binarization — PaddleOCR's detection model works better with
+ * No binarization — Tesseract works better with
  * 8-bit grayscale than with hard-thresholded binary images.
  *
  * The original image is never mutated — every step produces a new canvas.
@@ -258,7 +258,7 @@ function deskew(src: HTMLCanvasElement): { canvas: HTMLCanvasElement; angle: num
  * Returns the processed image as a JPEG data URL plus a list of steps
  * that were applied (for display to the user).
  *
- * No binarization — PaddleOCR works better with 8-bit grayscale.
+ * No binarization — Tesseract works better with 8-bit grayscale.
  */
 export async function preprocessImage(dataUrl: string): Promise<PreprocessResult> {
   const img = await loadImage(dataUrl);
