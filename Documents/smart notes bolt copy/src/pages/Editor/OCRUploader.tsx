@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, Image, X, Loader as Loader2, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, RotateCcw, TriangleAlert as AlertTriangle, Info } from 'lucide-react';
+import { Upload, Image, X, Loader as Loader2, CheckCircle2, AlertCircle, RotateCcw, AlertTriangle, Info } from 'lucide-react';
 import { extractTextFromImage } from '../../utils/ocr';
 import { OCRResult } from '../../types';
 

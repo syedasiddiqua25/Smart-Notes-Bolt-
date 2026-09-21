@@ -14,7 +14,7 @@ import { preprocessImage, compressImage } from './imageProcessing';
 // ---------------------------------------------------------------------------
 
 const OCR_API_URL =
-  import.meta.env.VITE_OCR_API_URL || 'http://localhost:5000/ocr';
+  import.meta.env.VITE_OCR_API_URL || '/api/ocr';
 
 // ---------------------------------------------------------------------------
 // Correction dictionary
@@ -132,11 +132,26 @@ async function paddleOCR(
   const processed = await preprocessImage(compressed);
   onProgress?.(30);
 
-  const resp = await fetch(OCR_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: processed.dataUrl }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+  let resp: Response;
+  try {
+    resp = await fetch(OCR_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: processed.dataUrl }),
+      signal: controller.signal,
+    });
+  } catch (fetchErr) {
+    clearTimeout(timeoutId);
+    if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+      throw new Error('OCR request timed out. The server may be downloading models on first run — please try again in a moment.');
+    }
+    throw new Error('Cannot connect to the OCR server. Please ensure the Flask backend is running.');
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   onProgress?.(70);
 

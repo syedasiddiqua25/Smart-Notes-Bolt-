@@ -15,6 +15,7 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB max request body
 
 # In-memory storage (replace with database in production)
 notes_store = {}
@@ -320,4 +321,9 @@ def health():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(
+        debug=os.environ.get('FLASK_DEBUG', '0') == '1',
+        host='0.0.0.0',
+        port=port,
+    )
