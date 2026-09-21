@@ -1,6 +1,6 @@
 """
 Smart Notes - Flask Backend API
-Provides OCR processing with Tesseract, note management,
+Provides OCR processing with PaddleOCR, note management,
 document export, and AI summary endpoints.
 """
 
@@ -63,20 +63,24 @@ def clean_ocr_text(text):
     return cleaned.strip()
 
 
-# --- Tesseract OCR Engine (lazy-loaded singleton) ---
+# --- PaddleOCR Engine (lazy-loaded singleton) ---
 
 _ocr_engine = None
 
 
 def get_ocr_engine():
-    """Lazily initialize the pytesseract engine on first use."""
+    """Lazily initialize the PaddleOCR engine on first use."""
     global _ocr_engine
     if _ocr_engine is not None:
         return _ocr_engine
 
-    import pytesseract
+    from paddleocr import PaddleOCR
 
-    _ocr_engine = pytesseract
+    _ocr_engine = PaddleOCR(
+        use_angle_cls=True,
+        lang='en',
+        show_log=False,
+    )
     return _ocr_engine
 
 
@@ -84,7 +88,7 @@ def get_ocr_engine():
 
 @app.route('/ocr', methods=['POST'])
 def ocr_process():
-    """Process an image with Tesseract and return extracted text + confidence."""
+    """Process an image with PaddleOCR and return extracted text + confidence."""
     data = request.get_json()
     image_data = data.get('image') if data else None
 
@@ -94,7 +98,6 @@ def ocr_process():
     try:
         import cv2
         import numpy as np
-        from PIL import Image
 
         # Decode base64 image
         if image_data.startswith('data:image'):
@@ -107,22 +110,29 @@ def ocr_process():
         if img is None:
             return jsonify({'error': 'Could not decode image'}), 400
 
-        # Convert OpenCV BGR to PIL RGB for Tesseract
-        pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-
-        # Run Tesseract with confidence data
+        # Run PaddleOCR
         engine = get_ocr_engine()
+        result = engine.ocr(img, cls=True)
 
-        # Get text
-        full_text = engine.image_to_string(pil_img, lang='eng', config='--psm 6')
+        # PaddleOCR returns a list of pages; each page is a list of lines.
+        # Each line: [bbox, (text, confidence)]
+        all_lines = []
+        confidences = []
 
-        # Get confidence data
-        data_dict = engine.image_to_data(
-            pil_img, lang='eng', config='--psm 6',
-            output_type=engine.Output.DICT
-        )
-        confidences = [int(c) for c in data_dict['conf'] if int(c) > 0]
-        avg_confidence = round(sum(confidences) / len(confidences), 2) if confidences else 0
+        for page in result:
+            if page is None:
+                continue
+            for line in page:
+                if line is None:
+                    continue
+                text = line[1][0]
+                conf = line[1][1]
+                all_lines.append(text)
+                if conf is not None and conf > 0:
+                    confidences.append(conf)
+
+        full_text = '\n'.join(all_lines)
+        avg_confidence = round(sum(confidences) / len(confidences) * 100, 2) if confidences else 0
 
         # Split into paragraphs
         paragraphs = [p.strip() for p in full_text.split('\n\n') if p.strip()]
@@ -141,7 +151,7 @@ def ocr_process():
         return jsonify({
             'text': '',
             'confidence': 0,
-            'error': 'pytesseract not installed. Run: pip install pytesseract pillow opencv-python'
+            'error': 'PaddleOCR not installed. Run: pip install paddleocr paddlepaddle'
         }), 503
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -307,7 +317,7 @@ def generate_summary():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'version': '2.1.0'}), 200
+    return jsonify({'status': 'ok', 'version': '2.0.0'}), 200
 
 
 if __name__ == '__main__':

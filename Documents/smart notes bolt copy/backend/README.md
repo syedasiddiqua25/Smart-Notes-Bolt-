@@ -1,22 +1,28 @@
 # Smart Notes - Backend
 
-Flask API server for Smart Notes.
+Flask API server for Smart Notes, providing OCR via PaddleOCR.
 
 ## Prerequisites
 
-This backend uses **Tesseract OCR** for text recognition. You must install
-the Tesseract system binary before running the server:
+**Python 3.11 is required.** PaddlePaddle does not provide wheels for
+Python 3.12 or 3.13, and has no support for Python 3.14. Use a dedicated
+3.11 environment to run this backend.
 
-- **Ubuntu/Debian:** `sudo apt install tesseract-ocr`
-- **macOS (Homebrew):** `brew install tesseract`
-- **Windows:** Download the installer from https://github.com/UB-Mannheim/tesseract/wiki
+### Install Python 3.11
+
+- **Ubuntu/Debian:** `sudo apt install python3.11 python3.11-venv`
+- **macOS (Homebrew):** `brew install python@3.11`
+- **Windows:** Download from https://www.python.org/downloads/release/python-3119/
 
 ## Setup
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate   # Windows
+# Create a virtualenv using Python 3.11
+python3.11 -m venv venv
+source venv/bin/activate    # Linux/Mac
+# venv\Scripts\activate     # Windows
+
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -28,11 +34,14 @@ python app.py
 
 Server runs on `http://localhost:5000`
 
+> On first OCR request, PaddleOCR downloads its detection and recognition
+> models (~100 MB). Subsequent requests are fast.
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/ocr` | Process image with Tesseract OCR |
+| POST | `/ocr` | Process image with PaddleOCR |
 | POST | `/save-note` | Save/update a note |
 | GET | `/get-notes` | Get all notes |
 | DELETE | `/delete-note/<id>` | Delete a note |

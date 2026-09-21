@@ -1,7 +1,7 @@
 /**
  * Smart Notes — OCR Pipeline
  *
- * Sends the image to the Flask backend running Tesseract OCR, receives
+ * Sends the image to the Flask backend running PaddleOCR, receives
  * extracted text with per-line confidence, and post-processes the
  * result with spell correction and paragraph detection.
  */
@@ -109,7 +109,7 @@ function detectParagraphs(text: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Backend OCR call (Tesseract via Flask)
+// Backend OCR call (PaddleOCR via Flask)
 // ---------------------------------------------------------------------------
 
 interface BackendOCRResponse {
@@ -119,7 +119,7 @@ interface BackendOCRResponse {
   error?: string;
 }
 
-async function tesseractOCR(
+async function paddleOCR(
   imageDataUrl: string,
   onProgress?: (p: number) => void,
 ): Promise<OCRResult> {
@@ -181,7 +181,7 @@ async function tesseractOCR(
     rawText,
     confidence: data.confidence || 0,
     paragraphs,
-    engine: 'tesseract',
+    engine: 'paddleocr',
     lowConfidenceWords,
     preprocessingApplied: processed.steps,
   };
@@ -210,8 +210,8 @@ export async function extractTextFromImage(
 
   onProgress?.(2);
 
-  // Step 2: Send to Tesseract backend
-  const result = await tesseractOCR(dataUrl, onProgress);
+  // Step 2: Send to PaddleOCR backend
+  const result = await paddleOCR(dataUrl, onProgress);
   onProgress?.(100);
   return result;
 }
