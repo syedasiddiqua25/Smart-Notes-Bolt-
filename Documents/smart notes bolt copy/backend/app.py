@@ -161,7 +161,6 @@ def get_ocr_engine():
         lang='en',
         show_log=False,
         drop_score=0.3,
-        det_db_unclip_ratio=2.0,
     )
     return _ocr_engine
 
