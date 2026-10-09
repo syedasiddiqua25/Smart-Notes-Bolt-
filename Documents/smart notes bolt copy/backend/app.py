@@ -207,6 +207,19 @@ def ocr_process():
                     continue
                 all_lines.append(line)
 
+        # --- TEMPORARY DEBUG LOGGING (remove after diagnosis) ---
+        print(f"\n{'='*60}")
+        print(f"[OCR DEBUG] Raw PaddleOCR output — {len(all_lines)} lines detected")
+        print(f"{'='*60}")
+        for i, line in enumerate(all_lines):
+            box = line[0]
+            text = line[1][0]
+            conf = line[1][1]
+            box_str = ', '.join(f'[{p[0]:.1f},{p[1]:.1f}]' for p in box)
+            print(f"  Line {i:3d} | conf={conf:.4f} | bbox=[{box_str}] | text=\"{text}\"")
+        print(f"{'='*60}\n")
+        # --- END TEMPORARY DEBUG LOGGING ---
+
         # Sort lines into reading order using bounding-box coordinates.
         ordered_texts, ordered_confs = order_lines_reading_order(all_lines)
 
