@@ -63,6 +63,86 @@ def clean_ocr_text(text):
     return cleaned.strip()
 
 
+def order_lines_reading_order(lines):
+    """Sort OCR lines into natural reading order using bounding boxes.
+
+    PaddleOCR returns lines in internal detection order (patch-by-patch),
+    not top-to-bottom / left-to-right.  Each line carries a bounding box
+    with four corner points:
+        [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+
+    We compute each box's vertical and horizontal centre, group boxes that
+    sit on the same visual row (vertical centres within half the median
+    box height), sort each row left-to-right, then sort rows top-to-bottom.
+    Lines on the same row are joined with a space; rows are joined with a
+    newline.
+    """
+    if not lines:
+        return []
+
+    # Extract (vcenter, hcenter, height, text, conf) for each line
+    entries = []
+    for line in lines:
+        if line is None:
+            continue
+        box = line[0]
+        text = line[1][0]
+        conf = line[1][1]
+
+        xs = [p[0] for p in box]
+        ys = [p[1] for p in box]
+        hcenter = sum(xs) / 4
+        vcenter = sum(ys) / 4
+        height = max(ys) - min(ys)
+
+        entries.append({
+            'vcenter': vcenter,
+            'hcenter': hcenter,
+            'height': height,
+            'text': text,
+            'conf': conf,
+        })
+
+    if not entries:
+        return []
+
+    # Median box height → row-grouping tolerance
+    heights = sorted(e['height'] for e in entries)
+    median_height = heights[len(heights) // 2]
+    tolerance = median_height * 0.5
+
+    # Sort by vertical centre so we can sweep top-to-bottom
+    entries.sort(key=lambda e: e['vcenter'])
+
+    # Group into rows: lines whose vcenters are within `tolerance` of the
+    # row's anchor vcenter belong to the same row.
+    rows = []
+    current_row = [entries[0]]
+    row_vcenter = entries[0]['vcenter']
+
+    for entry in entries[1:]:
+        if abs(entry['vcenter'] - row_vcenter) <= tolerance:
+            current_row.append(entry)
+        else:
+            rows.append(current_row)
+            current_row = [entry]
+            row_vcenter = entry['vcenter']
+    rows.append(current_row)
+
+    # Within each row sort left-to-right; join with spaces.
+    # Join rows with newlines.
+    ordered_texts = []
+    ordered_confs = []
+    for row in rows:
+        row.sort(key=lambda e: e['hcenter'])
+        ordered_texts.append(' '.join(e['text'] for e in row))
+        for e in row:
+            if e['conf'] is not None and e['conf'] > 0:
+                ordered_confs.append(e['conf'])
+
+    return ordered_texts, ordered_confs
+
+
 # --- PaddleOCR Engine (lazy-loaded singleton) ---
 
 _ocr_engine = None
@@ -80,6 +160,8 @@ def get_ocr_engine():
         use_angle_cls=True,
         lang='en',
         show_log=False,
+        drop_score=0.3,
+        det_db_unclip_ratio=2.0,
     )
     return _ocr_engine
 
@@ -116,23 +198,21 @@ def ocr_process():
 
         # PaddleOCR returns a list of pages; each page is a list of lines.
         # Each line: [bbox, (text, confidence)]
+        # Flatten all pages into a single list of lines.
         all_lines = []
-        confidences = []
-
         for page in result:
             if page is None:
                 continue
             for line in page:
                 if line is None:
                     continue
-                text = line[1][0]
-                conf = line[1][1]
-                all_lines.append(text)
-                if conf is not None and conf > 0:
-                    confidences.append(conf)
+                all_lines.append(line)
 
-        full_text = '\n'.join(all_lines)
-        avg_confidence = round(sum(confidences) / len(confidences) * 100, 2) if confidences else 0
+        # Sort lines into reading order using bounding-box coordinates.
+        ordered_texts, ordered_confs = order_lines_reading_order(all_lines)
+
+        full_text = '\n'.join(ordered_texts)
+        avg_confidence = round(sum(ordered_confs) / len(ordered_confs) * 100, 2) if ordered_confs else 0
 
         # Split into paragraphs
         paragraphs = [p.strip() for p in full_text.split('\n\n') if p.strip()]
