@@ -263,8 +263,8 @@ def ocr_process():
         MIN_LINES_PER_100PX = 0.6
         min_expected = max(3, int(h / 100 * MIN_LINES_PER_100PX))
 
-        if len(all_lines) < min_expected:
-            print(f"[OCR DEBUG] Pass 1 below threshold ({len(all_lines)}/{min_expected}) — running enlarged-image retry")
+        if len(all_lines) < min_expected or len(all_lines) < 8:
+            print(f"[OCR DEBUG] Pass 1 below threshold ({len(all_lines)}/{min_expected}) or fewer than 8 lines — running enlarged-image retry")
             scaled = cv2.resize(img, (w * 3 // 2, h * 3 // 2), interpolation=cv2.INTER_CUBIC)
             result2 = engine.ocr(scaled, cls=True)
 
@@ -286,7 +286,7 @@ def ocr_process():
             added = len(all_lines) - before_merge
             print(f"[OCR DEBUG] Merged: {before_merge} + {added} new = {len(all_lines)} total lines")
         else:
-            print(f"[OCR DEBUG] Pass 1 meets threshold ({len(all_lines)}/{min_expected}) — no retry needed")
+            print(f"[OCR DEBUG] Pass 1 meets threshold ({len(all_lines)}/{min_expected}) and >= 8 lines — no retry needed")
 
         # Sort lines into reading order using bounding-box coordinates.
         ordered_texts, ordered_confs = order_lines_reading_order(all_lines)
