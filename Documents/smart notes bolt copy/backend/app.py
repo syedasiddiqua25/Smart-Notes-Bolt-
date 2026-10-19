@@ -254,6 +254,8 @@ def ocr_process():
                     continue
                 all_lines.append(line)
 
+        print(f"[OCR DEBUG] Image: {w}x{h}px | Pass 1 detected: {len(all_lines)} lines")
+
         # Heuristic: if the first pass found very few lines relative to the
         # image height, the detector likely missed text rows.  Re-run on a
         # 1.5× upscaled copy to give the detector more pixel density, then
@@ -262,6 +264,7 @@ def ocr_process():
         min_expected = max(3, int(h / 100 * MIN_LINES_PER_100PX))
 
         if len(all_lines) < min_expected:
+            print(f"[OCR DEBUG] Pass 1 below threshold ({len(all_lines)}/{min_expected}) — running enlarged-image retry")
             scaled = cv2.resize(img, (w * 3 // 2, h * 3 // 2), interpolation=cv2.INTER_CUBIC)
             result2 = engine.ocr(scaled, cls=True)
 
@@ -276,7 +279,14 @@ def ocr_process():
                     box = [[p[0] * 2 / 3, p[1] * 2 / 3] for p in line[0]]
                     second_lines.append([box, line[1]])
 
+            print(f"[OCR DEBUG] Pass 2 (1.5x) detected: {len(second_lines)} lines")
+
+            before_merge = len(all_lines)
             all_lines = merge_ocr_lines(all_lines, second_lines)
+            added = len(all_lines) - before_merge
+            print(f"[OCR DEBUG] Merged: {before_merge} + {added} new = {len(all_lines)} total lines")
+        else:
+            print(f"[OCR DEBUG] Pass 1 meets threshold ({len(all_lines)}/{min_expected}) — no retry needed")
 
         # Sort lines into reading order using bounding-box coordinates.
         ordered_texts, ordered_confs = order_lines_reading_order(all_lines)
