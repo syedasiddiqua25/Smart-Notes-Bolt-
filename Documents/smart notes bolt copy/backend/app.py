@@ -143,6 +143,53 @@ def order_lines_reading_order(lines):
     return ordered_texts, ordered_confs
 
 
+def _box_center(box):
+    """Return (hcenter, vcenter, height) for a PaddleOCR bounding box."""
+    xs = [p[0] for p in box]
+    ys = [p[1] for p in box]
+    return sum(xs) / 4, sum(ys) / 4, max(ys) - min(ys)
+
+
+def merge_ocr_lines(primary, secondary, iou_threshold=0.5):
+    """Merge two lists of PaddleOCR lines, keeping primary lines and adding
+    secondary lines only when they don't overlap an existing primary line.
+
+    Overlap is estimated with a 1-D IoU on the vertical axis: two lines are
+    considered duplicates if their vertical spans overlap by more than
+    iou_threshold.  This is cheaper than full 2-D IoU and robust enough
+    for line-level dedup since text lines are roughly horizontal.
+    """
+    if not secondary:
+        return primary
+
+    # Precompute vertical spans for primary lines
+    primary_spans = []
+    for line in primary:
+        box = line[0]
+        ys = [p[1] for p in box]
+        primary_spans.append((min(ys), max(ys)))
+
+    merged = list(primary)
+    for line in secondary:
+        box = line[0]
+        ys = [p[1] for p in box]
+        lo, hi = min(ys), max(ys)
+        span = hi - lo if hi > lo else 1
+
+        is_dup = False
+        for (plo, phi) in primary_spans:
+            inter = max(0, min(hi, phi) - max(lo, plo))
+            union = (hi - lo) + (phi - plo) - inter
+            if union > 0 and inter / union >= iou_threshold:
+                is_dup = True
+                break
+
+        if not is_dup:
+            merged.append(line)
+
+    return merged
+
+
 # --- PaddleOCR Engine (lazy-loaded singleton) ---
 
 _ocr_engine = None
@@ -191,32 +238,12 @@ def ocr_process():
         if img is None:
             return jsonify({'error': 'Could not decode image'}), 400
 
-        # --- TEMPORARY IMAGE DIAGNOSTICS (remove after diagnosis) ---
         h, w = img.shape[:2]
-        print(f"\n{'='*60}")
-        print(f"[OCR DEBUG] Decoded image: width={w}, height={h}, channels={img.shape[2] if img.ndim == 3 else 1}")
-        print(f"[OCR DEBUG] Image dtype={img.dtype}, pixel range=[{img.min()}, {img.max()}]")
-        print(f"[OCR DEBUG] Passing image array to engine.ocr()")
-        print(f"{'='*60}")
-        # --- END TEMPORARY IMAGE DIAGNOSTICS ---
 
-        # Run PaddleOCR
+        # Run PaddleOCR — first pass on the original image
         engine = get_ocr_engine()
         result = engine.ocr(img, cls=True)
 
-        # --- TEMPORARY DETECTION DIAGNOSTICS (remove after diagnosis) ---
-        raw_count = 0
-        if result:
-            for page in result:
-                if page is not None:
-                    raw_count += len(page)
-        print(f"\n{'='*60}")
-        print(f"[OCR DEBUG] PaddleOCR returned {len(result) if result else 0} page(s), {raw_count} total raw detection(s)")
-        print(f"{'='*60}\n")
-        # --- END TEMPORARY DETECTION DIAGNOSTICS ---
-
-        # PaddleOCR returns a list of pages; each page is a list of lines.
-        # Each line: [bbox, (text, confidence)]
         # Flatten all pages into a single list of lines.
         all_lines = []
         for page in result:
@@ -227,18 +254,29 @@ def ocr_process():
                     continue
                 all_lines.append(line)
 
-        # --- TEMPORARY DEBUG LOGGING (remove after diagnosis) ---
-        print(f"\n{'='*60}")
-        print(f"[OCR DEBUG] Raw PaddleOCR output — {len(all_lines)} lines detected")
-        print(f"{'='*60}")
-        for i, line in enumerate(all_lines):
-            box = line[0]
-            text = line[1][0]
-            conf = line[1][1]
-            box_str = ', '.join(f'[{p[0]:.1f},{p[1]:.1f}]' for p in box)
-            print(f"  Line {i:3d} | conf={conf:.4f} | bbox=[{box_str}] | text=\"{text}\"")
-        print(f"{'='*60}\n")
-        # --- END TEMPORARY DEBUG LOGGING ---
+        # Heuristic: if the first pass found very few lines relative to the
+        # image height, the detector likely missed text rows.  Re-run on a
+        # 1.5× upscaled copy to give the detector more pixel density, then
+        # merge new lines that don't overlap existing ones.
+        MIN_LINES_PER_100PX = 0.6
+        min_expected = max(3, int(h / 100 * MIN_LINES_PER_100PX))
+
+        if len(all_lines) < min_expected:
+            scaled = cv2.resize(img, (w * 3 // 2, h * 3 // 2), interpolation=cv2.INTER_CUBIC)
+            result2 = engine.ocr(scaled, cls=True)
+
+            second_lines = []
+            for page in result2:
+                if page is None:
+                    continue
+                for line in page:
+                    if line is None:
+                        continue
+                    # Rescale bounding boxes back to original coordinates
+                    box = [[p[0] * 2 / 3, p[1] * 2 / 3] for p in line[0]]
+                    second_lines.append([box, line[1]])
+
+            all_lines = merge_ocr_lines(all_lines, second_lines)
 
         # Sort lines into reading order using bounding-box coordinates.
         ordered_texts, ordered_confs = order_lines_reading_order(all_lines)
