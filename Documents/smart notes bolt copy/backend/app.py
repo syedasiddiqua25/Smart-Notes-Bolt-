@@ -191,9 +191,29 @@ def ocr_process():
         if img is None:
             return jsonify({'error': 'Could not decode image'}), 400
 
+        # --- TEMPORARY IMAGE DIAGNOSTICS (remove after diagnosis) ---
+        h, w = img.shape[:2]
+        print(f"\n{'='*60}")
+        print(f"[OCR DEBUG] Decoded image: width={w}, height={h}, channels={img.shape[2] if img.ndim == 3 else 1}")
+        print(f"[OCR DEBUG] Image dtype={img.dtype}, pixel range=[{img.min()}, {img.max()}]")
+        print(f"[OCR DEBUG] Passing image array to engine.ocr()")
+        print(f"{'='*60}")
+        # --- END TEMPORARY IMAGE DIAGNOSTICS ---
+
         # Run PaddleOCR
         engine = get_ocr_engine()
         result = engine.ocr(img, cls=True)
+
+        # --- TEMPORARY DETECTION DIAGNOSTICS (remove after diagnosis) ---
+        raw_count = 0
+        if result:
+            for page in result:
+                if page is not None:
+                    raw_count += len(page)
+        print(f"\n{'='*60}")
+        print(f"[OCR DEBUG] PaddleOCR returned {len(result) if result else 0} page(s), {raw_count} total raw detection(s)")
+        print(f"{'='*60}\n")
+        # --- END TEMPORARY DETECTION DIAGNOSTICS ---
 
         # PaddleOCR returns a list of pages; each page is a list of lines.
         # Each line: [bbox, (text, confidence)]
